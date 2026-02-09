@@ -1,7 +1,6 @@
 import os
-import shutil
-import uuid
-import time
+
+import json # <--- IMPORTANT IMPORT
 from typing import Dict, List
 from dotenv import load_dotenv
 
@@ -41,9 +40,7 @@ llm = ChatGroq(
 )
 
 # --- 2. SESSION MANAGEMENT ---
-# Store vectorstores in memory: { "session_id": FAISS_Object }
 user_sessions: Dict[str, FAISS] = {}
-SESSION_TIMEOUT = 3600  # 1 hour
 
 def get_session_id(request: Request):
     return request.headers.get("X-Session-ID")
@@ -52,7 +49,6 @@ def get_vectorstore(session_id: str):
     if session_id in user_sessions:
         return user_sessions[session_id]
     
-    # Try loading from disk
     folder_path = f"faiss_indexes/{session_id}"
     if os.path.exists(folder_path):
         try:
@@ -62,7 +58,6 @@ def get_vectorstore(session_id: str):
         except:
             return None
     return None
-
 
 class ChatRequest(BaseModel):
     message: str
@@ -80,40 +75,23 @@ async def load_scenario(req: ScenarioRequest, request: Request):
     data = SCENARIOS.get(req.scenario_id)
     if not data: return {"error": "Scenario not found"}
     
-    # Create fake documents from the dictionary
     docs = [
         Document(page_content=data["doc_a"], metadata={"source": "Old_Documentation.txt"}),
         Document(page_content=data["doc_b"], metadata={"source": "New_Changelog.txt"})
     ]
     
-    # Split & Embed
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     splits = splitter.split_documents(docs)
     
-    # Save isolated for this user
     vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
     
-    # Persist to disk
     folder = f"faiss_indexes/{session_id}"
     if not os.path.exists(folder): os.makedirs(folder)
     vectorstore.save_local(folder)
     
-    # Update memory
     user_sessions[session_id] = vectorstore
     
     return {"status": f"Loaded scenario: {req.scenario_id}", "chunks": len(splits)}
-
-@app.post("/ingest")
-async def ingest_documents(request: Request):
-    session_id = get_session_id(request)
-    if not session_id: return {"error": "Missing Session ID"}
-
-    # Standard ingest logic (assuming user put files in a folder named after their session)
-    # For simplicity in this demo, we assume ./documents is shared or uploaded via UI
-    # In a real app, you'd handle file uploads here.
-    
-    # For now, let's just return a placeholder if no file upload logic exists yet
-    return {"status": "For this demo, please use the 'Load Scenario' dropdown."}
 
 @app.post("/chat")
 async def chat(req: ChatRequest, request: Request):
@@ -131,6 +109,7 @@ async def chat(req: ChatRequest, request: Request):
     response = llm.invoke(prompt)
     return {"response": response.content}
 
+# --- THE UPGRADED MULTI-ISSUE AUDITOR ---
 @app.get("/maintenance")
 async def run_maintenance(request: Request):
     session_id = get_session_id(request)
@@ -144,32 +123,60 @@ async def run_maintenance(request: Request):
     
     if len(doc_ids) < 2: return {"issues": []}
 
-    # Grab the two loaded docs
     doc_a = docstore[doc_ids[0]].page_content
-    doc_b = docstore[doc_ids[1]].page_content # In scenario mode we strictly have 2 docs
+    doc_b = docstore[doc_ids[1]].page_content 
     
+    # 1. Ask for a LIST of issues
     prompt = f"""
     You are a Senior Technical Writer auditing software documentation.
     
     Compare "Text A" (Old Docs) against "Text B" (New Changelog).
     
-    Task: Identify DEPRECATED features or CONFLICTING instructions.
+    Task: Identify ALL deprecated features, breaking changes, or security warnings.
+    There might be more than one issue. Find them all.
     
     Text A: {doc_a}
     Text B: {doc_b}
     
-    Reply ONLY in JSON format: 
-    {{
-        "contradiction": true, 
-        "reason": "Explain the conflict clearly", 
-        "fix": "Write the exact new sentence that should be in the docs", 
+    Reply ONLY in a JSON LIST format. Do not add markdown formatting.
+    Example:
+    [
+      {{
+        "contradiction": true,
+        "reason": "Description of issue 1",
+        "fix": "Fix for issue 1",
         "severity": "High",
-        "old_quote": "Exact quote from Text A that is now wrong",
-        "new_quote": "Exact quote from Text B that proves it changed"
-    }}
-    
-    If no contradiction, reply: {{"contradiction": false}}
+        "old_quote": "...",
+        "new_quote": "..."
+      }},
+      {{
+        "contradiction": true,
+        "reason": "Description of issue 2...",
+        ...
+      }}
+    ]
     """
     
     response = llm.invoke(prompt)
-    return {"issues": [response.content]}
+    
+    # 2. Parse the List safely
+    try:
+        content = response.content.strip()
+        # Clean up if Groq adds Markdown code blocks
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.endswith("```"):
+            content = content[:-3]
+        
+        # Parse into Python List
+        parsed_issues = json.loads(content)
+        
+        # 3. Convert back to list of strings (Frontend expects strings)
+        issue_strings = [json.dumps(issue) for issue in parsed_issues]
+        
+        return {"issues": issue_strings}
+        
+    except Exception as e:
+        print(f"JSON Parse Error: {e}")
+        # Fallback: Just send the raw text if parsing fails
+        return {"issues": [response.content]}

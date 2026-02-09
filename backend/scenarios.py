@@ -1,267 +1,260 @@
-# --- SCENARIO DATA (Strategy 3: Realistic Excerpts) ---
+# backend/scenarios.py
+
 SCENARIOS = {
     "stripe": {
         "doc_a": """
         STRIPE API REFERENCE v2020-08-27
-        SECTION: CHARGES
         
-        To charge a credit card or other payment source, you create a Charge object. 
-        If your API key is in test mode, the supplied payment source (e.g., card) won't actually be charged, 
-        although everything else will occur as if in live mode.
-        
+        1. CHARGES API
+        To charge a card, use the Charge object.
         POST /v1/charges
+        Params:
+        - amount: Integer
+        - source: Card ID (e.g., tok_visa)
         
-        REQUIRED PARAMETERS:
-        - amount: A positive integer representing how much to charge.
-        - currency: Three-letter ISO currency code, in lowercase.
-        - source: A payment source to be charged. This can be the ID of a card (i.e., credit card), 
-          a bank account, or a token source.
+        2. API KEYS
+        Your API keys are located in the dashboard. 
+        Publishable keys start with 'pk_live_'.
+        Secret keys start with 'sk_live_'.
+        You can embed your Secret Key in your mobile app code for easy access.
         """,
         
         "doc_b": """
         STRIPE API CHANGELOG v2024-01-01
-        TOPIC: MIGRATING TO PAYMENT INTENTS
         
-        BREAKING CHANGES:
+        CRITICAL SECURITY & API UPDATES:
         
-        1. Legacy Charges API Deprecation:
-        The direct /v1/charges endpoint is now deprecated and should not be used for new integrations. 
-        Attempting to use the 'source' parameter on new accounts will result in a 400 Bad Request error.
+        1. Charges API Deprecated
+        The /v1/charges endpoint is removed. You must migrate to /v1/payment_intents.
+        The 'source' parameter is no longer supported; use 'payment_method' instead.
         
-        2. New Standard: PaymentIntents:
-        You must now use the PaymentIntents API (/v1/payment_intents) for all payments. 
-        This API creates a PaymentIntent object to track the lifecycle of a payment from creation to confirmation.
-        
-        Migration Path:
-        Replace all calls to `stripe.charges.create` with `stripe.paymentIntents.create`.
+        2. API Key Security (Breaking Change)
+        Embedding Secret Keys (sk_live_) in client-side code (mobile apps/frontend) is now strictly prohibited and will cause immediate account suspension.
+        You must proxy requests through a backend server.
         """
     },
     "react": {
         "doc_a": """
-        REACT DOM DOCUMENTATION v17.0.2
-        Event Delegation Model
+        REACT DOM v17
         
-        In React 17, React attaches event listeners to the root document of the page.
-        This means that when you stop propagation on a synthetic event (e.g., e.stopPropagation()), 
-        it stops propagation at the document level.
+        1. Rendering
+        To render an app, use the render method:
+        import ReactDOM from 'react-dom';
+        ReactDOM.render(<App />, document.getElementById('root'));
         
-        Example:
-        document.addEventListener('click', ...)
+        2. Event Delegation
+        React attaches event listeners to the `document` node.
+        Stopping propagation (e.stopPropagation) prevents the event from reaching the document.
         """,
         
         "doc_b": """
-        REACT DOM CHANGELOG v18.0.0
-        Breaking Change: Event Delegation
+        REACT DOM v18 CHANGELOG
         
-        In React 18, we have changed how events are delegated.
-        React will no longer attach event listeners to the root document. 
-        Instead, it will attach them to the root DOM container (e.g., the div with id="root") where your React tree is mounted.
+        1. New Root API
+        ReactDOM.render is deprecated. Using it will warn in the console and run in compatibility mode.
+        You must use `ReactDOM.createRoot`:
+        import { createRoot } from 'react-dom/client';
+        const root = createRoot(container);
+        root.render(<App />);
         
-        Impact:
-        This change may affect how e.stopPropagation() works if you are mixing React and non-React code.
+        2. Event Delegation Update
+        React no longer attaches events to `document`. 
+        Events are now attached to the root DOM container (div#root).
         """
     },
     "nextjs": {
         "doc_a": """
-        NEXT.JS DOCUMENTATION v12
-        Data Fetching (Pages Directory)
+        NEXT.JS v12 (PAGES ROUTER)
         
-        To fetch data at build time, export an async function called 'getStaticProps' from your page file.
-        To fetch data on each request, export an async function called 'getServerSideProps'.
+        1. Data Fetching
+        Use `getStaticProps` or `getServerSideProps` inside your 'pages/' files to fetch data.
         
-        These functions only work inside the 'pages' directory.
+        2. Link Component
+        The <Link> component requires a child <a> tag:
+        <Link href="/about">
+          <a>About Us</a>
+        </Link>
         """,
         
         "doc_b": """
-        NEXT.JS APP ROUTER MIGRATION GUIDE (v14)
+        NEXT.JS v14 (APP ROUTER)
         
-        The 'pages' directory is now considered legacy. New projects should use the 'app' directory.
+        1. Data Fetching
+        `getStaticProps` and `getServerSideProps` are removed in the 'app' directory.
+        Use standard `await fetch()` in your Server Components.
         
-        Breaking Changes:
-        - 'getStaticProps' and 'getServerSideProps' are not supported in the 'app' directory.
-        - Instead, simply mark your component as 'async' and use standard 'fetch()' calls directly inside the component.
-        - Route handlers have replaced API routes.
+        2. Link Component Update
+        The <Link> component no longer requires a child <a> tag. 
+        Passing an <a> tag as a child is now invalid and causes hydration errors.
+        Usage: <Link href="/about">About Us</Link>
         """
     },
     "aws_s3": {
         "doc_a": """
-        AWS SDK FOR JAVASCRIPT v2
-        Service: S3
+        AWS SDK JS v2
         
-        To upload a file to S3, instantiate the service and call the upload method.
+        1. Instantiation
+        var s3 = new AWS.S3({ region: 'us-west-1' });
         
-        var s3 = new AWS.S3();
-        var params = {Bucket: 'bucket', Key: 'key', Body: stream};
-        s3.upload(params, function(err, data) {
-          console.log(err, data);
-        });
+        2. Uploads
+        s3.upload({Bucket: 'b', Key: 'k', Body: f}, function(err, data) { ... });
+        
+        3. Global Config
+        AWS.config.update({ accessKeyId: '...', secretAccessKey: '...' });
         """,
         
         "doc_b": """
-        AWS SDK FOR JAVASCRIPT v3
-        MIGRATION GUIDE
+        AWS SDK JS v3
         
-        The AWS SDK v3 is modularized. There is no global AWS namespace.
+        1. Modular Imports (Breaking)
+        Global 'AWS' namespace is removed. You must import { S3Client } from "@aws-sdk/client-s3".
         
-        Breaking Changes:
-        - You must import specific commands: import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-        - Callback style is no longer supported. You must use async/await or .then().
-        - The '.upload()' convenience method is removed from the core client; use 'PutObjectCommand' or 'lib-storage' instead.
+        2. Uploads
+        The `.upload()` method is removed from the client. 
+        You must use the `@aws-sdk/lib-storage` package or `PutObjectCommand`.
+        
+        3. Configuration
+        Global configuration `AWS.config.update` is removed.
+        Configuration must be passed explicitly to the Client constructor.
         """
     },
     "python": {
         "doc_a": """
-        PYTHON 2.7 DOCUMENTATION
-        The print statement
+        PYTHON 2.7
         
-        In Python 2, 'print' is a statement, not a function.
-        You do not need parentheses.
-        
-        Example:
+        1. Print
         print "Hello World"
-        print "The answer is", 42
+        
+        2. Integer Division
+        In Python 2, dividing two integers performs floor division:
+        5 / 2 # Returns 2
         """,
         
         "doc_b": """
-        PYTHON 3.0 RELEASE NOTES
-        What's New In Python 3.0
+        PYTHON 3.x
         
-        The print statement has been replaced with a print() function, with keyword arguments to replace most of the special syntax of the old print statement.
+        1. Print Function
+        `print` is now a function. `print "Hello"` raises a SyntaxError.
+        Use `print("Hello")`.
         
-        Breaking Change:
-        The syntax `print "Hello World"` is now invalid and will raise a SyntaxError.
-        You must write `print("Hello World")`.
+        2. True Division
+        The `/` operator now performs float division:
+        5 / 2 # Returns 2.5
+        Use `//` for floor division.
         """
     },
     "openai": {
         "doc_a": """
-        OPENAI PYTHON LIBRARY v0.28
-        Chat Completion
+        OPENAI PYTHON v0.28
         
-        To generate a chat response, use the static creation method on the global class:
-        
+        1. Setup
         import openai
-        openai.api_key = "..."
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello!"}]
-        )
+        openai.api_key = "sk-..."
+        
+        2. Fine-tuning
+        response = openai.FineTune.create(training_file="file-id")
         """,
         
         "doc_b": """
-        OPENAI PYTHON LIBRARY v1.0.0 (BETA)
-        Migration Guide
+        OPENAI PYTHON v1.0
         
-        The v1.0.0 library is a total rewrite. The global 'openai' object configuration is removed.
+        1. Client Instantiation
+        Global setup is removed.
+        client = OpenAI(api_key="sk-...")
         
-        New Usage:
-        You must instantiate a client object.
-        
-        from openai import OpenAI
-        client = OpenAI(api_key="...")
-        
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[...]
-        )
+        2. Fine-tuning API Renamed
+        `openai.FineTune` is removed. 
+        Use `client.fine_tuning.jobs.create(...)` instead.
         """
     },
     "tailwind": {
         "doc_a": """
-        TAILWIND CSS v2.0
-        Dark Mode Configuration
+        TAILWIND v2
         
-        To enable dark mode, set the 'darkMode' option in your tailwind.config.js file to 'media' or 'class'.
+        1. Dark Mode
+        darkMode: 'class'
         
-        // tailwind.config.js
-        module.exports = {
-          darkMode: 'media', // or 'class'
-          // ...
-        }
+        2. Purge
+        Configure the `purge` option to remove unused styles:
+        purge: ['./src/**/*.js']
         """,
         
         "doc_b": """
-        TAILWIND CSS v3.4 RELEASE NOTES
+        TAILWIND v3
         
-        We have simplified the dark mode configuration.
-        The 'media' strategy is now the default if no option is provided.
+        1. Dark Mode
+        'class' strategy is deprecated. Use 'selector'.
         
-        Deprecation:
-        The 'class' strategy is deprecated in favor of 'selector'.
-        
-        // tailwind.config.js
-        module.exports = {
-          darkMode: 'selector', // replaces 'class'
-        }
+        2. Content (Breaking)
+        The `purge` option has been renamed to `content`.
+        Using `purge` will throw a warning and may be ignored in v4.
         """
     },
     "kubernetes": {
         "doc_a": """
-        KUBERNETES v1.20 DOCUMENTATION
-        Container Runtimes
+        KUBERNETES v1.19
         
-        Kubernetes supports Docker via the "Dockershim" bridge.
-        You can use Docker Engine directly as your container runtime.
-        The kubelet will automatically detect Docker and use it.
+        1. Ingress
+        apiVersion: networking.k8s.io/v1beta1
+        kind: Ingress
+        
+        2. Docker
+        Kubernetes uses Dockershim to communicate with Docker Engine.
         """,
         
         "doc_b": """
-        KUBERNETES v1.24 CHANGELOG
-        Removal of Dockershim
+        KUBERNETES v1.25
         
-        Breaking Change:
-        The Dockershim component has been removed from the kubelet in Kubernetes v1.24.
+        1. Ingress API Upgrade
+        networking.k8s.io/v1beta1 is removed. You must use `networking.k8s.io/v1`.
         
-        Impact:
-        You can no longer use Docker Engine as a container runtime.
-        You must switch to a CRI-compliant runtime like containerd or CRI-O.
+        2. Dockershim Removed
+        Dockershim is deleted. Docker Engine is no longer a supported runtime.
+        Use containerd.
         """
     },
     "github_actions": {
         "doc_a": """
         GITHUB ACTIONS v1
-        Workflow Commands
         
-        To set an output parameter for a step, use the specific echo format:
+        1. Set Output
+        echo "::set-output name=my_var::value"
         
-        run: echo "::set-output name=action_status::success"
+        2. Save State
+        echo "::save-state name=my_state::value"
         """,
         
         "doc_b": """
-        GITHUB ACTIONS CHANGELOG (Oct 2022)
-        Deprecation of save-state and set-output commands
+        GITHUB ACTIONS v3
         
-        The `::set-output` command is deprecated and will be disabled soon due to security vulnerabilities (CWE-78).
+        DEPRECATION NOTICE:
+        1. set-output is disabled.
+        Write to $GITHUB_OUTPUT instead: echo "my_var=value" >> $GITHUB_OUTPUT
         
-        New Syntax:
-        You should write to the `$GITHUB_OUTPUT` environment file instead.
-        
-        run: echo "action_status=success" >> $GITHUB_OUTPUT
+        2. save-state is disabled.
+        Write to $GITHUB_STATE instead: echo "my_state=value" >> $GITHUB_STATE
         """
     },
     "flutter": {
         "doc_a": """
-        FLUTTER SDK v2.0
-        Navigation Interception
+        FLUTTER v2
         
-        To intercept the back button on Android, wrap your widget in a WillPopScope widget.
+        1. Back Button
+        WillPopScope(onWillPop: ...)
         
-        return WillPopScope(
-          onWillPop: () async => false,
-          child: Scaffold(...),
-        );
+        2. Theme Buttons
+        FlatButton and RaisedButton are standard.
         """,
         
         "doc_b": """
-        FLUTTER SDK v3.12
-        Predictive Back Navigation
+        FLUTTER v3.12
         
-        Breaking Change:
-        WillPopScope is now deprecated to support Android 14's predictive back gesture.
+        1. PopScope
+        WillPopScope is deprecated. Use PopScope.
         
-        Migration:
-        Use the new `PopScope` widget instead.
-        The `onWillPop` callback is replaced by `canPop` (boolean) and `onPopInvoked` (callback).
+        2. Button Migration
+        FlatButton and RaisedButton are removed classes.
+        Use TextButton and ElevatedButton respectively.
         """
     }
 }

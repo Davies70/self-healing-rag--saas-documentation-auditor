@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   MessageSquare,
   Wrench,
@@ -14,15 +14,16 @@ import {
   Check,
   Trash2,
   Terminal,
+  WifiOff,
+  XCircle,
+  RefreshCw,
+  Shield,
+  ChevronDown,
+  Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Select,
   SelectContent,
@@ -38,29 +39,63 @@ import ReactMarkdown from 'react-markdown';
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
 const SCENARIOS = [
-  { id: 'stripe', name: 'Stripe API (Charges vs PaymentIntent)' },
-  { id: 'react', name: 'React 18 (Event Delegation)' },
-  { id: 'nextjs', name: 'Next.js 14 (Pages vs App Router)' },
-  { id: 'aws_s3', name: 'AWS SDK v3 (Modular Imports)' },
-  { id: 'python', name: 'Python 2 vs 3 (Print Statement)' },
-  { id: 'openai', name: 'OpenAI Python SDK (v1.0 Migration)' },
-  { id: 'tailwind', name: 'Tailwind CSS v3 (Dark Mode)' },
-  { id: 'kubernetes', name: 'Kubernetes (Dockershim Removal)' },
-  { id: 'github_actions', name: 'GitHub Actions (Set-Output)' },
-  { id: 'flutter', name: 'Flutter (WillPopScope Deprecation)' },
+  { id: 'stripe', name: 'Stripe API', detail: 'Charges vs PaymentIntent' },
+  { id: 'react', name: 'React 18', detail: 'Event Delegation' },
+  { id: 'nextjs', name: 'Next.js 14', detail: 'Pages vs App Router' },
+  { id: 'aws_s3', name: 'AWS SDK v3', detail: 'Modular Imports' },
+  { id: 'python', name: 'Python 2 vs 3', detail: 'Print Statement' },
+  { id: 'openai', name: 'OpenAI SDK', detail: 'v1.0 Migration' },
+  { id: 'tailwind', name: 'Tailwind CSS v3', detail: 'Dark Mode' },
+  { id: 'kubernetes', name: 'Kubernetes', detail: 'Dockershim Removal' },
+  { id: 'github_actions', name: 'GitHub Actions', detail: 'Set-Output' },
+  { id: 'flutter', name: 'Flutter', detail: 'WillPopScope Deprecation' },
 ];
+
+type ApiErrorInfo = {
+  title: string;
+  description: string;
+  isNetwork: boolean;
+};
+
+function getErrorInfo(error: unknown, context: string): ApiErrorInfo {
+  if (error instanceof TypeError && error.message.includes('fetch')) {
+    return {
+      title: 'Connection Failed',
+      description: `Unable to reach the server. Make sure the backend is running at ${API_BASE_URL}.`,
+      isNetwork: true,
+    };
+  }
+  if (error instanceof SyntaxError) {
+    return {
+      title: 'Invalid Response',
+      description: `The server returned an unexpected response during ${context}. The API may be misconfigured.`,
+      isNetwork: false,
+    };
+  }
+  const message =
+    error instanceof Error ? error.message : 'An unknown error occurred';
+  return {
+    title: `${context} Failed`,
+    description: message,
+    isNetwork: false,
+  };
+}
 
 export default function Home() {
   const [sessionId, setSessionId] = useState('');
   const [query, setQuery] = useState('');
   const [answer, setAnswer] = useState('');
   const [issues, setIssues] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingScenario, setIsLoadingScenario] = useState(false);
+  const [isAuditing, setIsAuditing] = useState(false);
   const [isChatting, setIsChatting] = useState(false);
   const [activeScenario, setActiveScenario] = useState('');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [auditComplete, setAuditComplete] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  // 1. Initialize Session ID on Load
   useEffect(() => {
     let sid = localStorage.getItem('rag_session_id');
     if (!sid) {
@@ -70,17 +105,33 @@ export default function Home() {
     setSessionId(sid);
   }, []);
 
-  // Helper for Headers
-  const getHeaders = () => ({
-    'Content-Type': 'application/json',
-    'X-Session-ID': sessionId,
-  });
+  useEffect(() => {
+    if (answer && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [answer]);
+
+  const getHeaders = useCallback(
+    () => ({
+      'Content-Type': 'application/json',
+      'X-Session-ID': sessionId,
+    }),
+    [sessionId],
+  );
+
+  const getActiveScenarioName = () => {
+    const scenario = SCENARIOS.find((s) => s.id === activeScenario);
+    return scenario ? `${scenario.name} - ${scenario.detail}` : '';
+  };
 
   const loadScenario = async (scenarioId: string) => {
-    setIsLoading(true);
+    setIsLoadingScenario(true);
     setActiveScenario(scenarioId);
     setAnswer('');
     setIssues([]);
+    setConnectionError(null);
+    setChatError(null);
+    setAuditComplete(false);
 
     try {
       const res = await fetch(`${API_BASE_URL}/load-scenario`, {
@@ -89,20 +140,35 @@ export default function Home() {
         body: JSON.stringify({ scenario_id: scenarioId }),
       });
 
-      if (!res.ok) throw new Error('Failed to load scenario');
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        throw new Error(
+          res.status === 404
+            ? `Scenario "${scenarioId}" not found on the server.`
+            : res.status === 500
+              ? 'Internal server error. Check the backend logs for details.'
+              : `Server returned ${res.status}${errorText ? `: ${errorText}` : ''}`,
+        );
+      }
 
+      const scenario = SCENARIOS.find((s) => s.id === scenarioId);
       toast({
-        title: 'Scenario Loaded',
-        description: 'Knowledge base updated with conflicting documentation.',
+        title: 'Environment Loaded',
+        description: `${scenario?.name} scenario is ready. You can now run an audit or ask questions.`,
       });
     } catch (error) {
+      const info = getErrorInfo(error, 'Loading scenario');
+      if (info.isNetwork) {
+        setConnectionError(info.description);
+      }
       toast({
         variant: 'destructive',
-        title: 'Error',
-        description: 'Could not load scenario.',
+        title: info.title,
+        description: info.description,
       });
+      setActiveScenario('');
     } finally {
-      setIsLoading(false);
+      setIsLoadingScenario(false);
     }
   };
 
@@ -110,6 +176,7 @@ export default function Home() {
     if (!query.trim()) return;
     setIsChatting(true);
     setAnswer('');
+    setChatError(null);
 
     try {
       const res = await fetch(`${API_BASE_URL}/chat`, {
@@ -118,17 +185,39 @@ export default function Home() {
         body: JSON.stringify({ message: query }),
       });
 
+      if (!res.ok) {
+        throw new Error(
+          res.status === 429
+            ? 'Rate limited. Please wait a moment before trying again.'
+            : `Server error (${res.status}). Please try again.`,
+        );
+      }
+
       const data = await res.json();
+
+      if (!data.response) {
+        throw new Error(
+          'The server returned an empty response. The query may not have matched any documents.',
+        );
+      }
+
       setAnswer(data.response);
     } catch (error) {
-      toast({ variant: 'destructive', title: 'Chat Failed' });
+      const info = getErrorInfo(error, 'Chat');
+      setChatError(info.description);
+      if (info.isNetwork) setConnectionError(info.description);
+      toast({
+        variant: 'destructive',
+        title: info.title,
+        description: info.description,
+      });
     } finally {
       setIsChatting(false);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !isChatting) {
+    if (e.key === 'Enter' && !isChatting && query.trim()) {
       handleChat();
     }
   };
@@ -136,147 +225,304 @@ export default function Home() {
   const clearChat = () => {
     setQuery('');
     setAnswer('');
+    setChatError(null);
   };
 
   const runAudit = async () => {
-    setIsLoading(true);
+    setIsAuditing(true);
     setIssues([]);
+    setConnectionError(null);
+    setAuditComplete(false);
 
     try {
       const res = await fetch(`${API_BASE_URL}/maintenance`, {
         headers: getHeaders(),
       });
+
+      if (!res.ok) {
+        throw new Error(
+          `Audit request failed with status ${res.status}. The maintenance endpoint may be unavailable.`,
+        );
+      }
+
       const data = await res.json();
       setIssues(data.issues || []);
+      setAuditComplete(true);
 
       if (data.issues?.length > 0) {
         toast({
           variant: 'destructive',
-          title: 'Conflicts Found',
-          description: 'Review the audit report below.',
+          title: `${data.issues.length} Conflict${data.issues.length > 1 ? 's' : ''} Found`,
+          description: 'Scroll down to review the detailed audit report.',
         });
       } else {
         toast({
-          title: 'All Clear',
-          description: 'No documentation conflicts detected.',
+          title: 'Audit Complete',
+          description:
+            'No documentation conflicts were detected in this environment.',
         });
       }
     } catch (error) {
-      toast({ variant: 'destructive', title: 'Audit Failed' });
+      const info = getErrorInfo(error, 'Audit');
+      if (info.isNetwork) setConnectionError(info.description);
+      toast({
+        variant: 'destructive',
+        title: info.title,
+        description: info.description,
+      });
     } finally {
-      setIsLoading(false);
+      setIsAuditing(false);
     }
   };
+
+  const isAnythingLoading = isLoadingScenario || isAuditing;
 
   return (
     <div className='min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-indigo-100'>
       <Toaster />
 
-      {/* Navbar */}
+      {/* Header */}
       <header className='bg-white border-b sticky top-0 z-20 shadow-sm'>
-        <div className='max-w-5xl mx-auto px-6 h-16 flex items-center justify-between'>
-          <div className='flex items-center gap-2 text-indigo-600'>
-            <div className='bg-indigo-50 p-2 rounded-lg'>
-              <Database className='w-5 h-5' />
+        <div className='max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between'>
+          <div className='flex items-center gap-2.5'>
+            <div className='bg-indigo-600 p-1.5 rounded-lg'>
+              <Shield className='w-4 h-4 text-white' />
             </div>
-            <h1 className='font-bold text-xl tracking-tight text-slate-900'>
+            <h1 className='font-bold text-lg tracking-tight text-slate-900'>
               DocuGuard
-              <span className='text-slate-400 font-medium text-sm ml-2 hidden sm:inline-block border-l pl-2 border-slate-200'>
-                SaaS Auditor
-              </span>
             </h1>
+            <span className='text-slate-400 font-normal text-xs border-l pl-2.5 border-slate-200 hidden sm:block'>
+              Self-Healing RAG Auditor
+            </span>
           </div>
-          <div className='flex items-center gap-2'>
-            <div className='hidden md:block text-xs text-slate-400 font-mono bg-slate-100 px-3 py-1 rounded-full'>
-              Session: {sessionId.slice(0, 8)}
-            </div>
+          <div className='flex items-center gap-3'>
+            {connectionError && (
+              <div className='flex items-center gap-1.5 text-xs text-red-500 font-medium'>
+                <WifiOff className='w-3.5 h-3.5' />
+                <span className='hidden sm:inline'>Disconnected</span>
+              </div>
+            )}
+            {!connectionError && sessionId && (
+              <div className='text-[11px] text-slate-400 font-mono bg-slate-50 px-2.5 py-1 rounded-md border border-slate-100'>
+                {sessionId.slice(0, 8)}
+              </div>
+            )}
           </div>
         </div>
       </header>
 
-      <main className='max-w-5xl mx-auto px-6 py-10 space-y-8'>
-        {/* Main Grid Layout */}
-        <div className='grid md:grid-cols-12 gap-8'>
-          {/* LEFT COLUMN: Controls (4 cols) */}
-          <div className='md:col-span-4 space-y-6'>
-            <Card className='shadow-sm border-slate-200 h-fit sticky top-24'>
-              <CardHeader className='bg-slate-50/50 pb-4 border-b border-slate-100'>
-                <CardTitle className='text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2'>
-                  <Wrench className='w-4 h-4' /> Simulation Control
-                </CardTitle>
-              </CardHeader>
-              <CardContent className='space-y-6 pt-6'>
-                <div className='space-y-3'>
-                  <label className='text-xs font-semibold text-slate-700 uppercase tracking-wide'>
-                    1. Load Environment
-                  </label>
-                  <Select onValueChange={loadScenario} disabled={isLoading}>
-                    <SelectTrigger className='w-full bg-white border-slate-200 focus:ring-indigo-500'>
-                      <SelectValue placeholder='Select Tech Stack...' />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SCENARIOS.map((s) => (
-                        <SelectItem
-                          key={s.id}
-                          value={s.id}
-                          className='cursor-pointer'
-                        >
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+      {/* Connection Error Banner */}
+      {connectionError && (
+        <div className='bg-red-50 border-b border-red-200'>
+          <div className='max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-start gap-3'>
+            <WifiOff className='w-4 h-4 text-red-500 mt-0.5 shrink-0' />
+            <div className='flex-1 min-w-0'>
+              <p className='text-sm font-semibold text-red-800'>
+                Backend Unreachable
+              </p>
+              <p className='text-xs text-red-600 mt-0.5 leading-relaxed'>
+                {connectionError}
+              </p>
+            </div>
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => setConnectionError(null)}
+              className='text-red-600 border-red-200 hover:bg-red-100 shrink-0 h-7 text-xs bg-transparent'
+            >
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      )}
 
-                <div className='space-y-3'>
-                  <label className='text-xs font-semibold text-slate-700 uppercase tracking-wide'>
-                    2. Execute Audit
-                  </label>
-                  <Button
-                    onClick={runAudit}
-                    className='w-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg transition-all duration-200'
-                    disabled={!activeScenario || isLoading}
-                  >
-                    {isLoading ? (
-                      <Spinner className='mr-2 text-white' />
-                    ) : (
-                      <Sparkles className='mr-2 w-4 h-4' />
+      <main className='max-w-6xl mx-auto px-4 sm:px-6 py-8'>
+        <div className='grid lg:grid-cols-12 gap-6'>
+          {/* LEFT SIDEBAR */}
+          <div className='lg:col-span-4 xl:col-span-3'>
+            <div className='sticky top-20 space-y-4'>
+              <Card className='shadow-sm border-slate-200'>
+                <CardHeader className='pb-3 border-b border-slate-100'>
+                  <CardTitle className='text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2'>
+                    <Wrench className='w-3.5 h-3.5' /> Control Panel
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className='space-y-5 pt-5'>
+                  {/* Step 1: Scenario */}
+                  <div className='space-y-2'>
+                    <label className='text-[11px] font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5'>
+                      <span className='bg-indigo-100 text-indigo-600 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold'>
+                        1
+                      </span>
+                      Load Environment
+                    </label>
+                    <Select
+                      onValueChange={loadScenario}
+                      disabled={isAnythingLoading}
+                    >
+                      <SelectTrigger className='w-full bg-white border-slate-200'>
+                        <SelectValue placeholder='Select a scenario...' />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SCENARIOS.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            <span className='font-medium'>{s.name}</span>
+                            <span className='text-muted-foreground ml-1'>
+                              ({s.detail})
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {isLoadingScenario && (
+                      <div className='flex items-center gap-2 text-xs text-indigo-600 py-1'>
+                        <Spinner className='text-indigo-600' />
+                        <span>Loading environment...</span>
+                      </div>
                     )}
-                    Run Auto-Auditor
+                  </div>
+
+                  {/* Step 2: Audit */}
+                  <div className='space-y-2'>
+                    <label className='text-[11px] font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5'>
+                      <span className='bg-indigo-100 text-indigo-600 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold'>
+                        2
+                      </span>
+                      Run Audit
+                    </label>
+                    <Button
+                      onClick={runAudit}
+                      className='w-full bg-indigo-600 hover:bg-indigo-700 text-white transition-all'
+                      disabled={!activeScenario || isAnythingLoading}
+                    >
+                      {isAuditing ? (
+                        <>
+                          <Spinner className='mr-2 text-white' />
+                          Analyzing...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className='mr-2 w-4 h-4' />
+                          Run Auto-Auditor
+                        </>
+                      )}
+                    </Button>
+                    {!activeScenario && (
+                      <p className='text-[11px] text-slate-400 leading-relaxed'>
+                        Select a scenario first to enable the auditor.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Status */}
+                  {activeScenario && (
+                    <div className='border-t border-slate-100 pt-4 space-y-2'>
+                      <p className='text-[11px] font-semibold text-slate-500 uppercase tracking-wide'>
+                        Status
+                      </p>
+                      <div className='space-y-1.5'>
+                        <div className='flex items-center gap-2 text-xs'>
+                          <CheckCircle2 className='w-3.5 h-3.5 text-green-500' />
+                          <span className='text-slate-600'>
+                            {getActiveScenarioName()}
+                          </span>
+                        </div>
+                        {auditComplete && (
+                          <div className='flex items-center gap-2 text-xs'>
+                            {issues.length > 0 ? (
+                              <>
+                                <AlertTriangle className='w-3.5 h-3.5 text-amber-500' />
+                                <span className='text-slate-600'>
+                                  {issues.length} conflict
+                                  {issues.length > 1 ? 's' : ''} found
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle2 className='w-3.5 h-3.5 text-green-500' />
+                                <span className='text-slate-600'>
+                                  No conflicts detected
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Help Tip */}
+                  <div className='bg-slate-50 border border-slate-100 rounded-lg p-3 text-[11px] text-slate-500 leading-relaxed'>
+                    <div className='flex items-start gap-2'>
+                      <Info className='w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0' />
+                      <span>
+                        Load a scenario to inject conflicting docs, then audit
+                        to detect and remediate issues automatically.
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+
+          {/* MAIN CONTENT */}
+          <div className='lg:col-span-8 xl:col-span-9 space-y-6'>
+            {/* AUDIT RESULTS */}
+            {auditComplete && issues.length > 0 && (
+              <section className='space-y-4'>
+                <div className='flex items-center justify-between pb-2 border-b border-slate-200'>
+                  <div className='flex items-center gap-2'>
+                    <AlertTriangle className='w-4 h-4 text-amber-500' />
+                    <h2 className='font-bold text-base text-slate-800'>
+                      Audit Report
+                    </h2>
+                    <span className='bg-red-100 text-red-700 text-[10px] font-bold px-2 py-0.5 rounded-full'>
+                      {issues.length} issue{issues.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    onClick={() => {
+                      setIssues([]);
+                      setAuditComplete(false);
+                    }}
+                    className='text-slate-400 hover:text-slate-600 h-7 text-xs'
+                  >
+                    Clear
                   </Button>
                 </div>
 
-                <div className='bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700 leading-relaxed'>
-                  <strong>Tip:</strong> Load a scenario to populate the
-                  "Knowledge Base", then run the auditor to cross-reference the
-                  Changelog against Documentation.
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* RIGHT COLUMN: Results & Chat (8 cols) */}
-          <div className='md:col-span-8 space-y-8'>
-            {/* SECTION A: AUDIT RESULTS */}
-            {issues.length > 0 && (
-              <div className='animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-4'>
-                <div className='flex items-center gap-2 pb-2 border-b border-slate-200'>
-                  <AlertTriangle className='w-5 h-5 text-red-500' />
-                  <h2 className='font-bold text-lg text-slate-800'>
-                    Audit Findings
-                  </h2>
-                </div>
-
                 {issues.map((issueStr, i) => {
-                  let data;
+                  let data: Record<string, string>;
                   try {
                     const cleanJson = issueStr.substring(
                       issueStr.indexOf('{'),
                       issueStr.lastIndexOf('}') + 1,
                     );
                     data = JSON.parse(cleanJson);
-                  } catch (e) {
-                    return null;
+                  } catch {
+                    return (
+                      <Card
+                        key={i}
+                        className='border-l-4 border-l-amber-400 shadow-sm'
+                      >
+                        <CardContent className='p-4'>
+                          <div className='flex items-start gap-3'>
+                            <AlertTriangle className='w-4 h-4 text-amber-500 mt-0.5 shrink-0' />
+                            <div>
+                              <p className='text-sm font-medium text-slate-700 mb-1'>
+                                Unparseable Finding
+                              </p>
+                              <p className='text-xs text-slate-500 font-mono break-all leading-relaxed'>
+                                {issueStr}
+                              </p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
                   }
 
                   if (!data.contradiction) return null;
@@ -284,52 +530,51 @@ export default function Home() {
                   return (
                     <Card
                       key={i}
-                      className='border-l-4 border-l-red-500 shadow-md overflow-hidden group hover:shadow-lg transition-shadow duration-200'
+                      className='border-l-4 border-l-red-500 shadow-sm overflow-hidden hover:shadow-md transition-shadow'
                     >
-                      <div className='bg-red-50/50 px-6 py-4 flex justify-between items-center border-b border-red-100'>
-                        <div className='flex items-center gap-2 text-red-700 font-bold'>
-                          <span>Conflict Detected</span>
-                        </div>
-                        <span className='bg-white text-red-600 text-[10px] font-extrabold px-3 py-1 rounded-full border border-red-200 shadow-sm uppercase tracking-widest'>
+                      <div className='bg-red-50/60 px-5 py-3 flex justify-between items-center border-b border-red-100'>
+                        <span className='text-red-800 font-bold text-sm'>
+                          Conflict #{i + 1}
+                        </span>
+                        <span className='bg-white text-red-600 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-red-200 uppercase tracking-wider'>
                           {data.severity || 'Critical'}
                         </span>
                       </div>
 
-                      <div className='p-6 space-y-6'>
+                      <div className='p-5 space-y-4'>
                         <div>
-                          <h3 className='text-xs font-bold text-slate-400 uppercase tracking-wide mb-2'>
+                          <h3 className='text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5'>
                             Analysis
                           </h3>
-                          <p className='text-slate-700 text-sm leading-relaxed font-medium'>
+                          <p className='text-slate-700 text-sm leading-relaxed'>
                             {data.reason}
                           </p>
                         </div>
 
-                        <div className='grid grid-cols-1 md:grid-cols-2 gap-4 text-sm'>
-                          <div className='bg-slate-50 p-4 rounded-lg border border-slate-100'>
-                            <span className='flex items-center gap-2 text-xs font-bold text-slate-400 uppercase mb-2'>
-                              <FileText className='w-3 h-3' /> Old Documentation
+                        <div className='grid grid-cols-1 md:grid-cols-2 gap-3'>
+                          <div className='bg-slate-50 p-3 rounded-lg border border-slate-100'>
+                            <span className='flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase mb-1.5'>
+                              <FileText className='w-3 h-3' /> Outdated Doc
                             </span>
-                            <p className='text-slate-500 line-through decoration-red-400/50 text-xs font-mono leading-relaxed bg-white p-2 rounded border border-slate-100'>
-                              "{data.old_quote || '...'}"
+                            <p className='text-slate-500 line-through decoration-red-300/60 text-xs font-mono leading-relaxed bg-white p-2 rounded border border-slate-100'>
+                              {`"${data.old_quote || '...'}"`}
                             </p>
                           </div>
-                          <div className='bg-slate-50 p-4 rounded-lg border border-slate-100'>
-                            <span className='flex items-center gap-2 text-xs font-bold text-slate-400 uppercase mb-2'>
-                              <Terminal className='w-3 h-3' /> New Changelog
+                          <div className='bg-slate-50 p-3 rounded-lg border border-slate-100'>
+                            <span className='flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase mb-1.5'>
+                              <Terminal className='w-3 h-3' /> Changelog
                             </span>
-                            <p className='text-slate-800 text-xs font-mono leading-relaxed bg-white p-2 rounded border border-slate-100 font-medium border-l-2 border-l-green-500'>
-                              "{data.new_quote || '...'}"
+                            <p className='text-slate-800 text-xs font-mono leading-relaxed bg-white p-2 rounded border border-slate-100 border-l-2 border-l-green-500'>
+                              {`"${data.new_quote || '...'}"`}
                             </p>
                           </div>
                         </div>
 
-                        <div className='bg-green-50 border border-green-200 rounded-lg p-4'>
-                          <div className='flex items-center gap-2 text-green-800 font-bold text-sm mb-2'>
-                            <CheckCircle2 className='w-4 h-4' /> Suggested
-                            Remediation
+                        <div className='bg-green-50 border border-green-200 rounded-lg p-3'>
+                          <div className='flex items-center gap-1.5 text-green-800 font-bold text-xs mb-1.5'>
+                            <CheckCircle2 className='w-3.5 h-3.5' /> Remediation
                           </div>
-                          <code className='block bg-white text-green-700 px-3 py-2 rounded border border-green-100 text-xs font-mono'>
+                          <code className='block bg-white text-green-700 px-3 py-2 rounded border border-green-100 text-xs font-mono leading-relaxed'>
                             {data.fix}
                           </code>
                         </div>
@@ -337,24 +582,46 @@ export default function Home() {
                     </Card>
                   );
                 })}
-              </div>
+              </section>
             )}
 
-            {/* SECTION B: CHAT INTERFACE */}
-            <div className='space-y-4'>
-              <div className='flex items-center justify-between pb-2 border-b border-slate-200'>
+            {/* ALL CLEAR STATE */}
+            {auditComplete && issues.length === 0 && (
+              <Card className='border-green-200 bg-green-50/50 shadow-sm'>
+                <CardContent className='p-6'>
+                  <div className='flex items-center gap-3'>
+                    <div className='bg-green-100 p-2.5 rounded-full'>
+                      <CheckCircle2 className='w-5 h-5 text-green-600' />
+                    </div>
+                    <div>
+                      <p className='font-bold text-green-800 text-sm'>
+                        No Conflicts Detected
+                      </p>
+                      <p className='text-xs text-green-600 mt-0.5'>
+                        The documentation for {getActiveScenarioName()} is
+                        consistent with the changelog.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* CHAT INTERFACE */}
+            <section className='space-y-3'>
+              <div className='flex items-center justify-between'>
                 <div className='flex items-center gap-2'>
-                  <MessageSquare className='w-5 h-5 text-indigo-600' />
-                  <h2 className='font-bold text-lg text-slate-800'>
+                  <MessageSquare className='w-4 h-4 text-indigo-600' />
+                  <h2 className='font-bold text-base text-slate-800'>
                     Verification Agent
                   </h2>
                 </div>
-                {answer && (
+                {(answer || chatError) && (
                   <Button
                     variant='ghost'
                     size='sm'
                     onClick={clearChat}
-                    className='text-slate-400 hover:text-red-500 h-8 text-xs'
+                    className='text-slate-400 hover:text-red-500 h-7 text-xs'
                   >
                     <Trash2 className='w-3 h-3 mr-1' /> Clear
                   </Button>
@@ -364,18 +631,47 @@ export default function Home() {
               <Card className='shadow-sm border-slate-200 overflow-hidden'>
                 <CardContent className='p-0'>
                   {/* Chat Output Area */}
-                  <div className='bg-slate-50/50 min-h-[160px] max-h-[500px] overflow-y-auto p-6'>
-                    {answer ? (
-                      <div className='flex gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300'>
-                        <div className='w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center shrink-0 border border-indigo-200'>
-                          <Sparkles className='w-4 h-4 text-indigo-600' />
-                        </div>
+                  <div className='bg-slate-50/50 min-h-[200px] max-h-[500px] overflow-y-auto p-5'>
+                    {isChatting && (
+                      <div className='flex items-center gap-3 py-8 justify-center'>
+                        <Spinner className='text-indigo-500' />
+                        <span className='text-sm text-slate-500'>
+                          Thinking...
+                        </span>
+                      </div>
+                    )}
 
+                    {chatError && !isChatting && (
+                      <div className='flex items-start gap-3 p-4 bg-red-50 rounded-lg border border-red-100'>
+                        <XCircle className='w-4 h-4 text-red-500 mt-0.5 shrink-0' />
+                        <div>
+                          <p className='text-sm font-semibold text-red-800'>
+                            Could not get a response
+                          </p>
+                          <p className='text-xs text-red-600 mt-1 leading-relaxed'>
+                            {chatError}
+                          </p>
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            onClick={handleChat}
+                            className='mt-3 text-red-600 border-red-200 hover:bg-red-100 h-7 text-xs bg-transparent'
+                          >
+                            <RefreshCw className='w-3 h-3 mr-1.5' /> Retry
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {answer && !isChatting && (
+                      <div className='flex gap-3'>
+                        <div className='w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center shrink-0 border border-indigo-200'>
+                          <Sparkles className='w-3.5 h-3.5 text-indigo-600' />
+                        </div>
                         <div className='flex-1 min-w-0'>
                           <div className='prose prose-sm max-w-none text-slate-700 leading-7'>
                             <ReactMarkdown
                               components={{
-                                // 1. Headers
                                 h1: ({ node, ...props }) => (
                                   <h1
                                     className='text-lg font-bold text-slate-900 mt-4 mb-2'
@@ -388,16 +684,12 @@ export default function Home() {
                                     {...props}
                                   />
                                 ),
-
-                                // 2. Bold Text
                                 strong: ({ node, ...props }) => (
                                   <span
                                     className='font-bold text-indigo-700'
                                     {...props}
                                   />
                                 ),
-
-                                // 3. Lists
                                 ul: ({ node, ...props }) => (
                                   <ul
                                     className='list-disc pl-5 space-y-1 my-3 text-slate-600'
@@ -413,13 +705,9 @@ export default function Home() {
                                 li: ({ node, ...props }) => (
                                   <li className='pl-1' {...props} />
                                 ),
-
-                                // 4. Paragraphs
                                 p: ({ node, ...props }) => (
                                   <p className='mb-3 last:mb-0' {...props} />
                                 ),
-
-                                // 5. Code Blocks (With Copy Button)
                                 code: ({
                                   node,
                                   inline,
@@ -427,7 +715,6 @@ export default function Home() {
                                   children,
                                   ...props
                                 }: any) => {
-                                  // Inline Code
                                   if (inline) {
                                     return (
                                       <code
@@ -438,7 +725,6 @@ export default function Home() {
                                       </code>
                                     );
                                   }
-                                  // Block Code
                                   return (
                                     <CodeBlock className={className}>
                                       {children}
@@ -450,38 +736,48 @@ export default function Home() {
                               {answer}
                             </ReactMarkdown>
                           </div>
+                          <div ref={chatEndRef} />
                         </div>
                       </div>
-                    ) : (
-                      // Empty State
-                      <div className='flex flex-col items-center justify-center h-full py-10 text-slate-400'>
+                    )}
+
+                    {!answer && !isChatting && !chatError && (
+                      <div className='flex flex-col items-center justify-center py-12 text-slate-400'>
                         <div className='bg-slate-100 p-3 rounded-full mb-3'>
-                          <MessageSquare className='w-6 h-6 opacity-40' />
+                          <MessageSquare className='w-5 h-5 opacity-40' />
                         </div>
-                        <p className='text-sm font-medium'>
-                          Ready to answer questions
+                        <p className='text-sm font-medium text-slate-500'>
+                          Ask a question
                         </p>
-                        <p className='text-xs opacity-60 mt-1'>
-                          Load a scenario above to get started
+                        <p className='text-xs opacity-60 mt-1 text-center max-w-xs'>
+                          {activeScenario
+                            ? 'Query the knowledge base to verify documentation accuracy.'
+                            : 'Load a scenario from the control panel to get started.'}
                         </p>
                       </div>
                     )}
                   </div>
 
                   {/* Input Area */}
-                  <div className='p-4 bg-white border-t border-slate-100'>
+                  <div className='p-3 bg-white border-t border-slate-100'>
                     <div className='flex gap-2'>
                       <Input
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="Ask a question about the documentation (e.g. 'How do I authenticate?')"
-                        className='border-slate-200 focus-visible:ring-indigo-500 shadow-sm'
+                        placeholder={
+                          activeScenario
+                            ? "e.g. 'How do I process payments?' or 'What changed in v3?'"
+                            : 'Load a scenario first...'
+                        }
+                        disabled={isChatting}
+                        className='border-slate-200 focus-visible:ring-indigo-500 shadow-sm text-sm'
                       />
                       <Button
                         onClick={handleChat}
                         disabled={isChatting || !query.trim()}
-                        className='bg-slate-900 hover:bg-slate-800 text-white shadow-md'
+                        className='bg-slate-900 hover:bg-slate-800 text-white shadow-sm px-3'
+                        aria-label='Send message'
                       >
                         {isChatting ? (
                           <Spinner />
@@ -490,13 +786,14 @@ export default function Home() {
                         )}
                       </Button>
                     </div>
-                    <p className='text-[10px] text-slate-400 mt-2 text-center'>
-                      AI can make mistakes. Verify important info.
+                    <p className='text-[10px] text-slate-400 mt-1.5 text-center'>
+                      AI responses may be inaccurate. Always verify critical
+                      information.
                     </p>
                   </div>
                 </CardContent>
               </Card>
-            </div>
+            </section>
           </div>
         </div>
       </main>
@@ -504,34 +801,39 @@ export default function Home() {
   );
 }
 
-// --- SUB-COMPONENT: CODE BLOCK WITH COPY BUTTON ---
-const CodeBlock = ({ children, className }: any) => {
+// --- CODE BLOCK WITH COPY ---
+function CodeBlock({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   const [isCopied, setIsCopied] = useState(false);
-  const textInput = String(children).replace(/\n$/, '');
+  const textContent = String(children).replace(/\n$/, '');
 
-  const onCopy = () => {
-    setIsCopied(true);
-    navigator.clipboard.writeText(textInput);
-    setTimeout(() => setIsCopied(false), 2000);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(textContent);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch {
+      // Clipboard API not available
+    }
   };
 
   return (
     <div className='relative my-4 group rounded-lg overflow-hidden border border-slate-800 bg-slate-950 shadow-lg'>
-      {/* Terminal Header */}
       <div className='flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-800'>
         <div className='flex gap-1.5'>
           <div className='w-2.5 h-2.5 rounded-full bg-red-500/80' />
           <div className='w-2.5 h-2.5 rounded-full bg-yellow-500/80' />
           <div className='w-2.5 h-2.5 rounded-full bg-green-500/80' />
         </div>
-        <div className='text-[10px] text-slate-500 font-mono'>bash</div>
-      </div>
-
-      {/* Copy Button */}
-      <div className='absolute top-2 right-2 z-10'>
         <button
           onClick={onCopy}
-          className='flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-slate-300 text-xs transition-colors backdrop-blur-sm'
+          className='flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/10 hover:bg-white/20 text-slate-400 text-[11px] transition-colors'
+          aria-label='Copy code'
         >
           {isCopied ? (
             <>
@@ -546,11 +848,9 @@ const CodeBlock = ({ children, className }: any) => {
           )}
         </button>
       </div>
-
-      {/* Code Content */}
       <pre className='p-4 overflow-x-auto text-slate-300 font-mono text-xs leading-relaxed selection:bg-indigo-500/30'>
-        <code className={className}>{textInput}</code>
+        <code className={className}>{textContent}</code>
       </pre>
     </div>
   );
-};
+}
