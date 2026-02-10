@@ -36,9 +36,9 @@ import { useToast } from '@/hooks/use-toast';
 import { Toaster } from '@/components/ui/toaster';
 import ReactMarkdown from 'react-markdown';
 
-const API_BASE_URL = 'http://127.0.0.1:8000';
+// const API_BASE_URL = 'http://127.0.0.1:8000';
 
-// const API_BASE_URL = 'https://3.68.108.28:8000';
+// const API_BASE_URL = 'http://3.68.108.28:8000';
 
 const SCENARIOS = [
   { id: 'stripe', name: 'Stripe API', detail: 'Charges vs PaymentIntent' },
@@ -63,7 +63,7 @@ function getErrorInfo(error: unknown, context: string): ApiErrorInfo {
   if (error instanceof TypeError && error.message.includes('fetch')) {
     return {
       title: 'Connection Failed',
-      description: `Unable to reach the server. Make sure the backend is running at ${API_BASE_URL}.`,
+      description: `Unable to reach the server.`,
       isNetwork: true,
     };
   }
@@ -136,7 +136,7 @@ export default function Home() {
     setAuditComplete(false);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/load-scenario`, {
+      const res = await fetch(`api/load-scenario`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ scenario_id: scenarioId }),
@@ -181,7 +181,7 @@ export default function Home() {
     setChatError(null);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/chat`, {
+      const res = await fetch(`api/chat`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ message: query }),
@@ -237,7 +237,7 @@ export default function Home() {
     setAuditComplete(false);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/maintenance`, {
+      const res = await fetch(`api/maintenance`, {
         headers: getHeaders(),
       });
 
