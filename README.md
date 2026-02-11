@@ -2,6 +2,8 @@
 
 DocuGuard is an automated documentation verification system designed to identify and remediate inconsistencies between software documentation and technical changelogs. By leveraging Retrieval-Augmented Generation (RAG) and Large Language Models (LLM), the system audits documentation for deprecated features, breaking changes, and security warnings.
 
+Try the App: https://docu-guard-self-healing-rag.vercel.app/
+
 ## Overview
 
 The system operates by ingesting pairs of documents—typically an existing documentation file and a newer changelog or release note. It generates vector embeddings for these documents to facilitate semantic search and comparison. The application provides two primary functions:
